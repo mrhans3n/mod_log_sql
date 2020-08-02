@@ -22,4 +22,4 @@
 
 #define log_error ap_log_error
 
-#endif /* APACHE20_H */
+#endif				/* APACHE20_H */

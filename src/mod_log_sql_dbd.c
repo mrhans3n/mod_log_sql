@@ -26,107 +26,115 @@
 #include "mod_dbd.h"
 
 typedef struct {
-	ap_dbd_t *dbd;
+    ap_dbd_t *dbd;
 } request_config_t;
 
 LOGSQL_MODULE_FORWARD(dbd);
 
-static ap_dbd_t *(*dbd_acquire_fn)(request_rec*) = NULL;
+static ap_dbd_t *(*dbd_acquire_fn) (request_rec *) = NULL;
 
-static ap_dbd_t *log_sql_dbd_getconnection(request_rec *r)
+static ap_dbd_t *log_sql_dbd_getconnection(request_rec * r)
 {
-	request_config_t *rconf = ap_get_module_config(r->request_config, &LOGSQL_MODULE(dbd));
-	if (!rconf) {
-		rconf = apr_pcalloc(r->pool, sizeof(request_config_t));
-		ap_set_module_config(r->request_config, &LOGSQL_MODULE(dbd), (void *)rconf);
-		rconf->dbd = dbd_acquire_fn(r);
-	}
-	return rconf->dbd;
+    request_config_t *rconf = ap_get_module_config(r->request_config, &LOGSQL_MODULE(dbd));
+    if (!rconf) {
+	rconf = apr_pcalloc(r->pool, sizeof(request_config_t));
+	ap_set_module_config(r->request_config, &LOGSQL_MODULE(dbd), (void *) rconf);
+	rconf->dbd = dbd_acquire_fn(r);
+    }
+    return rconf->dbd;
 }
 
 /* Connect to the database */
-static logsql_opendb_ret log_sql_dbd_connect(server_rec *s, logsql_dbconnection *db)
+static logsql_opendb_ret log_sql_dbd_connect(server_rec * s, logsql_dbconnection * db)
 {
-	// We are using mod_dbd so we don't do anything here
-	if (!dbd_acquire_fn) {
-		// no mod_dbd return failure
-		log_error(APLOG_MARK,APLOG_ERR,0, s,"mod_log_sql_dbd: mod_dbd is not loaded or available");
-		return LOGSQL_OPENDB_FAIL;
-	} else {
-		return LOGSQL_OPENDB_SUCCESS;
-	}
+    // We are using mod_dbd so we don't do anything here except mark if connected or not.
+    if (!dbd_acquire_fn) {
+	// no mod_dbd return failure
+	log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "mod_log_sql_dbd: mod_dbd is not loaded or available");
+	db->connected = 0;
+	return LOGSQL_OPENDB_FAIL;
+    } else {
+	db->connected = 1;
+	return LOGSQL_OPENDB_SUCCESS;
+    }
 }
 
 /* Close the DB link */
-static void log_sql_dbd_close(logsql_dbconnection *db)
+static void log_sql_dbd_close(logsql_dbconnection * db)
 {
-	// mod_dbd handles this, so do nothing
+    // mod_dbd handles this, so do nothing, except mark closed.
+    db->connected = 0;
 }
 
 /* Routine to escape the 'dangerous' characters that would otherwise
  * corrupt the INSERT string: ', \, and "
  */
-static const char *log_sql_dbd_escape(request_rec *r, const char *from_str, apr_pool_t *p,
-								logsql_dbconnection *db)
+static const char *log_sql_dbd_escape(request_rec * r, const char *from_str, apr_pool_t * p, logsql_dbconnection * db)
 {
-	// Acquire a DBD connection from mod_dbd
-	ap_dbd_t *dbd = log_sql_dbd_getconnection(r);
-	if (!dbd) return NULL;
+    // Acquire a DBD connection from mod_dbd
+    ap_dbd_t *dbd = log_sql_dbd_getconnection(r);
 
-	if (!from_str)
-		return NULL;
+    /* If apache tries to insert "-", an empty string, or NULL, insert NULL in the database */
+    if (dbd && from_str) {
 
-	return apr_pstrcat(p, "'",apr_dbd_escape(dbd->driver, p, from_str, dbd->handle),"'",NULL);
+	char *esc_str = (char *) apr_dbd_escape(dbd->driver, p, from_str, dbd->handle);
+
+	return apr_pstrcat(p, "'", esc_str, "'", NULL);
+    }
+
+    return NULL;
 }
 
 /* Run an insert query and return a categorized error or success */
-static logsql_query_ret log_sql_dbd_query(request_rec *r,logsql_dbconnection *db,
-								const char *query)
+static logsql_query_ret log_sql_dbd_query(request_rec * r, logsql_dbconnection * db, const char *query)
 {
-	int ret;
-	const char *err;
-	int affected;
-	// Acquire a DBD connection from mod_dbd
-	ap_dbd_t *dbd = log_sql_dbd_getconnection(r);
-	if (!dbd) return LOGSQL_QUERY_NOLINK;
+    int ret;
+    const char *err;
+    int affected;
+    // Acquire a DBD connection from mod_dbd
+    ap_dbd_t *dbd = log_sql_dbd_getconnection(r);
+    if (!dbd)
+	return LOGSQL_QUERY_NOLINK;
 
-	// Run the query
-	ret = apr_dbd_query(dbd->driver, dbd->handle, &affected, query);
-	if (ret == 0) {
-		return LOGSQL_QUERY_SUCCESS;
-	} else {
-		// attempt to detect error message
-		err = apr_dbd_error(dbd->driver, dbd->handle, ret);
-		log_error(APLOG_MARK, APLOG_ERR, 0, r->server, "DB Returned error: (%d) %s", ret, err);
-		// Unable to check if "NO SUCH TABLE" due to apr_dbd not mapping error codes to a standard set.
-		return LOGSQL_QUERY_FAIL;
-	}
+    // Run the query
+    ret = apr_dbd_query(dbd->driver, dbd->handle, &affected, query);
+    if (ret == 0) {
+	return LOGSQL_QUERY_SUCCESS;
+    } else {
+	// attempt to detect error message
+	err = apr_dbd_error(dbd->driver, dbd->handle, ret);
+	log_error(APLOG_MARK, APLOG_DEBUG, 0, r->server, "DB Returned error: (%d) %s", ret, err);
+	// Unable to check if "NO SUCH TABLE" due to apr_dbd not mapping error codes to a standard set.
+	return LOGSQL_QUERY_FAIL;
+    }
 }
 
 /* Create table table_name of type table_type. */
-static logsql_table_ret log_sql_dbd_create(request_rec *r, logsql_dbconnection *db,
-						logsql_tabletype table_type, const char *table_name)
+static logsql_table_ret log_sql_dbd_create(request_rec * r, logsql_dbconnection * db,
+					   logsql_tabletype table_type, const char *table_name)
 {
-	return LOGSQL_TABLE_FAIL;
+    return LOGSQL_TABLE_FAIL;
 }
 
-static const char *supported_drivers[] = {"dbd",NULL};
+static const char *supported_drivers[] = { "dbd", NULL };
+
 static logsql_dbdriver log_sql_dbd_driver = {
     "dbd",
-	supported_drivers,
-	log_sql_dbd_connect,/* open DB connection */
-	log_sql_dbd_close,	/* close DB connection */
-	log_sql_dbd_escape,	/* escape query */
-	log_sql_dbd_query,	/* insert query */
-	log_sql_dbd_create	/* create table */
+    supported_drivers,
+    log_sql_dbd_connect,	/* open DB connection */
+    log_sql_dbd_close,		/* close DB connection */
+    log_sql_dbd_escape,		/* escape query */
+    log_sql_dbd_query,		/* insert query */
+    log_sql_dbd_create		/* create table */
 };
 
-LOGSQL_REGISTER(dbd) {
-	dbd_acquire_fn = APR_RETRIEVE_OPTIONAL_FN(ap_dbd_acquire);
-	if (dbd_acquire_fn == NULL) {
-		log_error(APLOG_MARK,APLOG_ERR,0,s,"You must load mod_dbd to enable AuthDBD functions");
+LOGSQL_REGISTER(dbd)
+{
+    dbd_acquire_fn = APR_RETRIEVE_OPTIONAL_FN(ap_dbd_acquire);
+    if (dbd_acquire_fn == NULL) {
+	log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "You must load mod_dbd to enable AuthDBD functions");
     }
 
-	log_sql_register_driver(p,&log_sql_dbd_driver);
-	LOGSQL_REGISTER_RETURN;
+    log_sql_register_driver(p, &log_sql_dbd_driver);
+    LOGSQL_REGISTER_RETURN;
 }

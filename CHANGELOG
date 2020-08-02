@@ -1,3 +1,43 @@
+2.0.15: 2020-06-20
+* Removed support for apache < 2.4
+* Added support for pkg-config
+* Code cleanup, indent -kr -l120, + manual lineups, feels more 'readable'
+* Fixed create_tables.sql - now works in both MySQL and PostgreSQL
+* Fixed manual.xml - package now includes all dtd's needed to transform
+  it to manual.html
+* Moved global_config.createtables to global_config.db.createtables
+* added mutex pointer to global_config.db if APR_HAS_THREADS
+* all extract_ functions now either return a value, or NULL.
+  no more '-' or empty strings.
+* extract_remote_host() now returns ap_get_useragent_host()
+* extract_remote_address() now returns r->useragent_ip
+* rewrote extract_specific_cookie()'s repetitive behaviour as a builtin
+  function
+* extract_bytes_sent() now only included when LOGIO module in NOT built
+  same column name is now used for both extract_bytes_sent, logio's bytes_out
+* rewrote extract_request_time() to output YYYY-MM-DD HH:MM:SS as GMT since
+  this format works for both MySQL and PostgreSQL timestamp types
+* removed extract_request_time_custom()
+* activated extract_connection_status(), extract_remote_address() 
+  and extract_local_address()
+* log_sql_register_driver() now only registers the driver we're configured
+  to use in global_config.db.parms
+* create_logformat_default() now defaults to log everything.
+* simplified set_log_sql_info() - now always takes an uri
+* create/destroy thread mutex if apache has threads in child_init/exit
+* moved reconnect logic to the individual drivers
+* added thread locks around driver->insert and create tables commands.
+* logio bytes_in and bytes_out Alias changes to b and B respectively
+* MySQL auto reconnect option set - this should seamlessly reconnect if
+  the db link is broken.
+* log_sql_(*)_escape returns NULL if apache tries to log NULL,'-' or an empty string
+  truncates strings at 255 characters and sets end of string to ... if it was.
+* Fixed PostgreSQL support
+* Added two columns, win32status and service plus a view, inetlog
+  so the same database can be used for both apache and Microsofts IIS
+  with logging to an ODBC database
+* modified manual.xml to reflect changes
+
 1.101: 2005-02-18?
 * fix empty comparison on itemsets for solaris issue #41
 
